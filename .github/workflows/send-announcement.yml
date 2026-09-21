@@ -31,21 +31,43 @@ jobs:
           URL: ${{ inputs.url }}
         run: |
           python3 - <<'PY'
-          import json, os, pathlib
+          import json, os, pathlib, time
           path = pathlib.Path("announcements.json")
-          prev = {"id": 0}
+          prev = {}
           if path.exists():
               try:
                   prev = json.loads(path.read_text(encoding="utf-8") or "{}")
               except Exception:
-                  prev = {"id": 0}
-          nxt = int(prev.get("id") or 0) + 1
-          data = {
+                  prev = {}
+          items = []
+          if isinstance(prev.get("items"), list):
+              items = [i for i in prev["items"] if isinstance(i, dict)]
+          elif int(prev.get("id") or 0) > 0:
+              items = [{
+                  "id": int(prev.get("id") or 0),
+                  "title": (prev.get("title") or "").strip(),
+                  "body": (prev.get("body") or "").strip(),
+                  "url": (prev.get("url") or "").strip(),
+                  "time": int(prev.get("time") or 0),
+              }]
+          max_id = int(prev.get("id") or 0)
+          for item in items:
+              try:
+                  max_id = max(max_id, int(item.get("id") or 0))
+              except Exception:
+                  pass
+          nxt = max_id + 1
+          entry = {
               "id": nxt,
               "title": os.environ.get("TITLE", "").strip(),
               "body": os.environ.get("BODY", "").strip(),
               "url": os.environ.get("URL", "").strip(),
+              "time": int(time.time() * 1000),
           }
+          items.insert(0, entry)
+          items = items[:200]
+          data = dict(entry)
+          data["items"] = items
           path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
           print(data)
           PY
