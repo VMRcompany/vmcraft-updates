@@ -1,0 +1,59 @@
+name: Send announcement
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Notification title
+        required: true
+        type: string
+      body:
+        description: Notification text
+        required: true
+        type: string
+      url:
+        description: Optional link
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write announcements.json
+        env:
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+          URL: ${{ inputs.url }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path("announcements.json")
+          prev = {"id": 0}
+          if path.exists():
+              try:
+                  prev = json.loads(path.read_text(encoding="utf-8") or "{}")
+              except Exception:
+                  prev = {"id": 0}
+          nxt = int(prev.get("id") or 0) + 1
+          data = {
+              "id": nxt,
+              "title": os.environ.get("TITLE", "").strip(),
+              "body": os.environ.get("BODY", "").strip(),
+              "url": os.environ.get("URL", "").strip(),
+          }
+          path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+          print(data)
+          PY
+      - name: Commit and push
+        run: |
+          git config user.name "VMcraft"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add announcements.json
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Broadcast announcement"
+          git push
