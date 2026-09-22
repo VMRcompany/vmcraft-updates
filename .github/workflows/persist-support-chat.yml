@@ -1,0 +1,99 @@
+name: Persist support chat
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  persist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge ntfy into gist
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: 9dcb8cd50eff9c5c2e194e44cc0145e1
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          gist_id = os.environ["GIST_ID"]
+          token = os.environ["GIST_TOKEN"]
+          prefix = "vmcraft-advid-9dcb8-"
+          registry = "vmcraft-advid-registry-9dcb8"
+
+          def get(url):
+              req = urllib.request.Request(url, headers={"User-Agent": "VMcraft"})
+              with urllib.request.urlopen(req, timeout=20) as r:
+                  return r.read().decode("utf-8", "replace")
+
+          def ntfy(topic):
+              try:
+                  raw = get("https://ntfy.sh/%s/json?poll=1" % topic).strip()
+              except Exception:
+                  return []
+              if not raw:
+                  return []
+              out = []
+              for line in raw.splitlines():
+                  try:
+                      out.append(json.loads(line))
+                  except Exception:
+                      pass
+              return out
+
+          ids = []
+          for ev in ntfy(registry):
+              tid = (ev.get("message") or "").strip()
+              if tid and tid not in ids:
+                  ids.append(tid)
+
+          req = urllib.request.Request(
+              "https://api.github.com/gists/" + gist_id,
+              headers={"User-Agent": "VMcraft", "Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"},
+          )
+          with urllib.request.urlopen(req, timeout=20) as r:
+              gist = json.loads(r.read().decode())
+          content = gist.get("files", {}).get("index.json", {}).get("content") or '{"threads":[]}'
+          feed = json.loads(content)
+          threads = {t.get("id"): t for t in (feed.get("threads") or []) if t.get("id")}
+
+          for tid in ids:
+              t = threads.get(tid) or {"id": tid, "messages": [], "updated": 0, "preview": ""}
+              msgs = list(t.get("messages") or [])
+              seen = {(m.get("time"), m.get("role"), m.get("text")) for m in msgs}
+              topic = prefix + tid.replace("-", "").lower()
+              for ev in ntfy(topic):
+                  try:
+                      msg = json.loads(ev.get("message") or "{}")
+                  except Exception:
+                      continue
+                  key = (msg.get("time"), msg.get("role"), msg.get("text"))
+                  if key in seen:
+                      continue
+                  msgs.append(msg)
+                  seen.add(key)
+              msgs.sort(key=lambda m: m.get("time") or 0)
+              t["messages"] = msgs[-200:]
+              if msgs:
+                  t["preview"] = msgs[-1].get("text") or ""
+                  t["updated"] = msgs[-1].get("time") or t.get("updated") or 0
+              threads[tid] = t
+
+          ordered = sorted(threads.values(), key=lambda t: t.get("updated") or 0, reverse=True)
+          body = json.dumps({"threads": ordered}, ensure_ascii=False, separators=(",", ":"))
+          payload = json.dumps({"files": {"index.json": {"content": body}}}).encode("utf-8")
+          req = urllib.request.Request(
+              "https://api.github.com/gists/" + gist_id,
+              data=payload,
+              method="PATCH",
+              headers={
+                  "User-Agent": "VMcraft",
+                  "Authorization": "Bearer " + token,
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=20) as r:
+              r.read()
+          print("threads", len(ordered))
+          PY
